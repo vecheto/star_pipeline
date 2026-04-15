@@ -1,0 +1,23 @@
+# Datos y carpetas locales
+J0559-1404/
+omega/
+pipe/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Imagenes temporales
+*.png
+
+# Archivos de datos grandes
+*.fits
+*.fit
+*.csv
+
+# Entornos virtuales
+venv/
+.env/
+env/
