@@ -1,0 +1,104 @@
+similar stars: [ 44  50  51  55  56  68  93  98 100 102 104  43 154 173 192 209 215 225
+ 230 231 237 247 254 262 266 177 208 232 258]
+
+
+
+Out[62]: HEADER hdul0
+SIMPLE  =                    T / conforms to FITS standard                      
+BITPIX  =                    8 / array data type                                
+NAXIS   =                    0 / number of array dimensions                     
+EXTEND  =                    T                                                  
+TARGET  = 'J0559-1404'         / Target name                                    
+EPOCHREF=               2016.0 / Reference epoch for astrometric fit (yr)       
+PLX_MAS =    88.27320137404689 / Parallax (mas)                                 
+E_PLX   =   0.7417465491124219 / Parallax error (mas)                           
+MUXI_MSY=    571.3794141431041 / Proper motion in Xi (mas/yr)                   
+E_MUXI  =  0.09598974401913946 / Proper motion in Xi error (mas/yr)             
+MUET_MSY=   -334.0692765359141 / Proper motion in Eta (mas/yr)                  
+E_MUET  =   0.0894296126833922 / Proper motion in Eta error (mas/yr)            
+REFFRAME=                   19 / Reference Frame ID (index in list)             
+TARG_ID =                  102 / Target ID in the reference frame      
+
+
+Out[63]: HEADER x hdul
+XTENSION= 'BINTABLE'           / binary table extension                         
+BITPIX  =                    8 / array data type                                
+NAXIS   =                    2 / number of array dimensions                     
+NAXIS1  =                  192 / length of dimension 1                          
+NAXIS2  =                  227 / length of dimension 2                          
+PCOUNT  =                    0 / number of group parameters                     
+GCOUNT  =                    1 / number of groups                               
+TFIELDS =                   24 / number of table fields                         
+TTYPE1  = 'X       '                                                            
+TFORM1  = 'D       '                                                            
+TTYPE2  = 'Y       '                                                            
+TFORM2  = 'D       '                                                            
+TTYPE3  = 'err_X   '                                                            
+TFORM3  = 'D       '                                                            
+TTYPE4  = 'err_Y   '                                                            
+TFORM4  = 'D       '                                                            
+TTYPE5  = 'mag     '                                                            
+TFORM5  = 'D       '                                                            
+TTYPE6  = 'errmag  '                                                            
+TFORM6  = 'D       '                                                            
+TTYPE7  = 'RA      '                                                            
+TFORM7  = 'D       '                                                            
+TTYPE8  = 'DEC     '                                                            
+TFORM8  = 'D       '                                                            
+TTYPE9  = 'obstime '                                                            
+TFORM9  = 'D       '                                                            
+TTYPE10 = 'ID_file '       <---                                                     
+TFORM10 = 'D       '                                                            
+TTYPE11 = 'flux    '                                                            
+TFORM11 = 'D       '                                                            
+TTYPE12 = 'flux_err'                                                            
+TFORM12 = 'D       '                                                            
+TTYPE13 = 'frame_id'                                                            
+TFORM13 = 'D       '                                                            
+TTYPE14 = 'idx_gaia'                                                            
+TFORM14 = 'D       '                                                            
+TTYPE15 = 'd2d_gaia'                                                            
+TFORM15 = 'D       '                                                            
+TTYPE16 = 'X_raw   '                                                            
+TFORM16 = 'D       '                                                            
+TTYPE17 = 'Y_raw   '                                                            
+TFORM17 = 'D       '                                                            
+TTYPE18 = 'eta     '                                                            
+TFORM18 = 'D       '                                                            
+TTYPE19 = 'xi      '                                                            
+TFORM19 = 'D       '                                                            
+TTYPE20 = 'err_eta '                                                            
+TFORM20 = 'D       '                                                            
+TTYPE21 = 'err_xi  '                                                            
+TFORM21 = 'D       '                                                            
+TTYPE22 = 'RA_input'                                                            
+TFORM22 = 'D       '                                                            
+TTYPE23 = 'DEC_input'                                                           
+TFORM23 = 'D       '                                                            
+TTYPE24 = 'mag_calib'                                                           
+TFORM24 = 'D       '                                                            
+EXTNAME = 'FRAME_0000'         / extension name                                 
+OBSTIME =   2000.2977349726775                                                  
+MJD-OBS =            51652.971                                                  
+LEN     =                  154                                                  
+FILENAME= 's0559s14T_20000418_jit.rwf.fits'                                     
+OBJECT  = '0559s14T'                                                            
+UTDATE  = '2000-04-18T23:20:14.3116'                                            
+EXP_TIME=                 10.0                                                  
+TARRA   =             89.83281                                                  
+TARDEC  =           -14.081979                                                  
+TAREP   =               2017.5                                                  
+TARPMRA =              571.073                                                  
+TARPMDEC=             -338.047                                                  
+TARPI   =              95.6374                                                  
+HELIOX  =  -0.8808425266786254                                                  
+HELIOY  =  -0.4569797256109777                                                  
+HELIOZ  =  -0.1979141535306996                                                  
+PLXFRA  =  -0.8790772637042339                                                  
+PLXFDEC =   0.3043070516799974                                                  
+X_COEF_0= -1.3977944632476E-06                                                  
+X_COEF_1= 4.27947380712253E-10                                                  
+X_COEF_2= 0.000754892847696871                                                  
+Y_COEF_0= -1.3980725861555E-06                                                  
+Y_COEF_1= -2.6608306145731E-10                                                  
+Y_COEF_2= 0.000771244108528551  
