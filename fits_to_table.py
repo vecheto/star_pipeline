@@ -5,17 +5,21 @@ import numpy as np
 
 rows = []
 
+SKIP_HDUS = {17}  # HDU indices to exclude (1-based, relative to hdul)
+
 with fits.open("J0559-1404/J0559-1404_NTT_sequence.fits") as hdul:
-    for hdu in hdul[1:]:
+    for i, hdu in enumerate(hdul[1:], start=1):
+        if i in SKIP_HDUS:
+            continue
         if hdu.data is None:
             continue
+
 
         #epoch = hdu.header.get("MJD-OBS")
         data = hdu.data
 
-        for obstime, star_id, X, Y, ra, dec, mag, errmag, flux, flux_err in zip(
+        for target_id, (obstime, X, Y, ra, dec, mag, errmag, flux, flux_err) in enumerate(zip(
             data["obstime"],
-            data["ID_file"],
             data["X"],
             data["Y"],
             data["RA"],
@@ -24,12 +28,10 @@ with fits.open("J0559-1404/J0559-1404_NTT_sequence.fits") as hdul:
             data["errmag"],
             data['flux'],
             data['flux_err']
-        ):
-            if np.isnan(star_id):
-                continue
+        )):
             rows.append({
                 "epoch": obstime,
-                "star_id": int(star_id),
+                "star_id": target_id,
                 "X": X,
                 "Y": Y,
                 "ra": (360/(2*np.pi)) * float(ra),
@@ -42,10 +44,15 @@ with fits.open("J0559-1404/J0559-1404_NTT_sequence.fits") as hdul:
 
 # data
 data_full = pd.DataFrame(rows)
+data_full.to_csv('example.csv', index=False)
+
+
 
 # find median mag and median error to characterize star
 data_full["mag_median_star"] = data_full.groupby("star_id")["mag"].transform("median")
 data_full["errmag_median_star"] = data_full.groupby("star_id")["errmag"].transform("median")
+
+
 
 # extract similar stars
 target_star_id = 102
@@ -53,7 +60,7 @@ target_mag = data_full.loc[data_full["star_id"] == target_star_id, "mag_median_s
 target_sigma = data_full.loc[data_full["star_id"] == target_star_id, "errmag_median_star"].iloc[0]
 df_similar = pd.DataFrame()
 star_medians = data_full.groupby("star_id")["mag_median_star"].first()
-similar_ids = star_medians[(star_medians - target_mag).abs() <= 5 * target_sigma].index
+similar_ids = star_medians[(star_medians - target_mag).abs() <= 200 * target_sigma].index
 df_similar = data_full[data_full["star_id"].isin(similar_ids)].copy()
 
 print('similar stars:', df_similar.star_id.unique())
@@ -113,9 +120,9 @@ dif['dif'] = df_star['flux'] / epoch_stats['flux_median']
 dif['flux_err'] = df_star['flux_err']
 dif = dif.dropna()
 norm = np.median(dif['dif'])
-plt.errorbar(dif.index, dif['dif']/norm, yerr=dif['flux_err']/norm, fmt='--o')
+plt.errorbar(dif.index, dif['dif']/norm, yerr=0, fmt='--o')
 plt.xlabel("Epoch")
 plt.ylabel("Relative Flux")
-plt.title(f"Light curves")
+plt.title(f"Light curve Target Star")
 plt.savefig('figures/flux_target_star.png')
 plt.show()
