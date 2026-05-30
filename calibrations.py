@@ -2,9 +2,20 @@ import os
 import numpy as np
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
+from astropy.time import Time
 from glob import glob
 
-def create_master_dark(dark_dir, output_file='master_dark.fits', extension='.fit'):
+
+def sort_by_date(fits_paths):
+    date_map = {}
+    for path in fits_paths:
+        with fits.open(path) as hdul:
+            date_map[path] = Time(hdul[0].header['DATE-OBS'], format='isot').jd
+
+    return sorted(fits_paths, key=lambda p: date_map[p])
+
+
+def create_master_dark(dark_dir, output_file='master_dark.fits', extension='.fits'):
     # dark directory
     dark_files = glob(os.path.join(dark_dir, '*'+extension))
     
@@ -29,9 +40,9 @@ def create_master_dark(dark_dir, output_file='master_dark.fits', extension='.fit
             else:
                 darks.append(hdul[0].data)
 
-    # masterize        
+    # masterize
     darks = np.array(darks)
-    master_dark = np.median(darks, axis=0)
+    master_dark = np.median(darks, axis=0).astype(np.uint16)
     
     # save
     hdu = fits.PrimaryHDU(master_dark, header=header_first)
@@ -70,6 +81,7 @@ def create_master_flat(flat_dir, master_dark=None, output_file='master_flat.fits
             raise ValueError('master dark have not the same exptime with flats')    
     else: 
         master_dark = 0
+        print('No Master Dark')
 
     # append flats
     flats = []
@@ -99,12 +111,24 @@ def create_master_flat(flat_dir, master_dark=None, output_file='master_flat.fits
     print(f"master flat saved as: {output_file}")
 
 
-def calibrate(data_fits, master_flat, master_dark, subframe=[[0,1000],[0,1000]], isbias=False, use_subframe=True):
-    # data
-    if use_subframe:
-        data = data_fits.data[subframe[1][0]:subframe[1][1], subframe[0][0]:subframe[0][1]]
-    else:
-        data = data_fits.data
+def extract_subframe(image, center, size, save=None):
+    cx, cy = center
+    sub = image[cy - size:cy + size, cx - size:cx + size]
+    if save is not None:
+        fits.writeto(save, sub, overwrite=True)
+        print(f"subframe saved as: {save}")
+    return sub
+
+
+def coords_to_subframe(coords, center, size):
+    """Transform a list of (x, y) coords from the original image to the subframe."""
+    cx, cy = center
+    x0, y0 = cx - size, cy - size
+    return [(x - x0, y - y0) for x, y in coords]
+
+
+def calibrate(data_fits, master_flat, master_dark, isbias=False):
+    data = data_fits.data
 
     if master_flat is None:
         if master_dark is None:
@@ -117,30 +141,20 @@ def calibrate(data_fits, master_flat, master_dark, subframe=[[0,1000],[0,1000]],
     # dark
     header_dark = master_dark.header
     exptime_dark = header_dark['EXPTIME']
-    if use_subframe:
-        dark = master_dark.data[subframe[1][0]:subframe[1][1], subframe[0][0]:subframe[0][1]]
-    else:
-        dark = master_dark.data
+    dark = master_dark.data
 
     if exptime_dark != exptime_data:
         if not isbias:
             raise ValueError('dark and data have not the same exptime')
         else:
             print('using bias instead of dark...')
-            pass
 
     # flat
     header_flat = master_flat.header
     filter_flat = header_flat['FILTER']
-    if use_subframe:
-        flat = master_flat.data[subframe[1][0]:subframe[1][1], subframe[0][0]:subframe[0][1]]
-    else:
-        flat = master_flat.data
+    flat = master_flat.data
 
     if filter_flat != filter_data:
         raise ValueError('flat and data have not the same filter')
-    
-    # calibrate
-    data_calib = (data - dark) / (flat)
 
-    return data_calib
+    return (data - dark) / flat

@@ -134,7 +134,7 @@ def optimize_parameters(stamp, fwhm_min=1, fwhm_max=10, step=0.1, min_sky_width=
 
     # --- centro y FWHM ---
     centro = centroid(stamp)
-    fwhm = fit_fwhm(stamp)
+    fwhm = fit_fwhm(stamp)[0]
 
     # --- grilla de búsqueda (escalada con FWHM) ---
     ap = np.arange(fwhm_min*fwhm, fwhm_max*fwhm, step)
