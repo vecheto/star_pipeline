@@ -127,34 +127,40 @@ def coords_to_subframe(coords, center, size):
     return [(x - x0, y - y0) for x, y in coords]
 
 
-def calibrate(data_fits, master_flat, master_dark, isbias=False):
-    data = data_fits.data
+def calibrate(data_fits, master_flat, master_dark, isbias=False, isfit=True):
+    if isfit:
+        data = data_fits.data
 
-    if master_flat is None:
-        if master_dark is None:
-            return data
+        if master_flat is None:
+            if master_dark is None:
+                return data
 
-    header_data = data_fits.header
-    exptime_data = header_data['EXPTIME']
-    filter_data = header_data['FILTER']
+        header_data = data_fits.header
+        exptime_data = header_data['EXPTIME']
+        filter_data = header_data['FILTER']
 
-    # dark
-    header_dark = master_dark.header
-    exptime_dark = header_dark['EXPTIME']
-    dark = master_dark.data
+        # dark
+        header_dark = master_dark.header
+        exptime_dark = header_dark['EXPTIME']
+        dark = master_dark.data
 
-    if exptime_dark != exptime_data:
-        if not isbias:
-            raise ValueError('dark and data have not the same exptime')
-        else:
-            print('using bias instead of dark...')
+        if exptime_dark != exptime_data:
+            if not isbias:
+                raise ValueError('dark and data have not the same exptime')
+            else:
+                print('using bias instead of dark...')
 
-    # flat
-    header_flat = master_flat.header
-    filter_flat = header_flat['FILTER']
-    flat = master_flat.data
+        # flat
+        header_flat = master_flat.header
+        filter_flat = header_flat['FILTER']
+        flat = master_flat.data
 
-    if filter_flat != filter_data:
-        raise ValueError('flat and data have not the same filter')
+        if filter_flat != filter_data:
+            raise ValueError('flat and data have not the same filter')
+        
+    else:
+        data = data_fits
+        dark = master_dark
+        flat = master_flat
 
     return (data - dark) / flat

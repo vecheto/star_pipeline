@@ -7,13 +7,15 @@ import numpy as np
 fluxes = pd.read_csv('../HATS-26_transit/results/fluxes.csv')
 results_folder = '../HATS-26_transit/results/'
 target_name = 'HATS-26'
+target_star= '0'
+
 
 # compute relative flux and error
-cols = [c for c in fluxes.columns if c.startswith("flux_star_") and c != "flux_star_0"]
+cols = [c for c in fluxes.columns if c.startswith("flux_star_") and c != "flux_star_"+target_star]
 fluxes_for_median = fluxes[cols]
 median_flux = np.median(fluxes_for_median, axis=1)
-norm = np.median(fluxes['flux_star_0']/(median_flux))
-fluxes['relative_flux'] = fluxes['flux_star_0']/(norm * median_flux)
+norm = np.median(fluxes['flux_star_'+target_star]/(median_flux))
+fluxes['relative_flux'] = fluxes['flux_star_'+target_star]/(norm * median_flux)
 
 # Error propagation: r = f0 / (N * m), so sigma_r/r = sqrt((sigma_f0/f0)^2 + (sigma_m/m)^2)
 # Uncertainty in median of n comparison stars: sigma_m ~ sqrt(pi/2) * sqrt(sum(sigma_i^2)) / n
@@ -23,7 +25,7 @@ n_comp = len(cols)
 sigma_median = np.sqrt(np.pi / 2) * np.sqrt(np.sum(err_matrix**2, axis=1)) / n_comp
 
 fluxes['relative_err'] = fluxes['relative_flux'] * np.sqrt(
-    (fluxes['err_flux_star_0'] / fluxes['flux_star_0'])**2 +
+    (fluxes['err_flux_star_'+target_star] / fluxes['flux_star_'+target_star])**2 +
     (sigma_median / median_flux)**2
 )
 
