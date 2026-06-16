@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from photutils.psf import fit_fwhm
 from photutils.centroids import centroid_2dg
 import numpy as np
+import sources
 
 def cut_stamp(frames, center, radius, recenter=True):
     """
@@ -60,7 +61,6 @@ def centroid(stamp):
     return cx, cy
 
 
-
 def aperture_phot(stamp, centro, radio, skyradio_int, skyradio_ext):
     aperture = CircularAperture(centro, r=radio)
     annulus = CircularAnnulus(centro, r_in=skyradio_int, r_out=skyradio_ext)
@@ -92,36 +92,19 @@ def aperture_phot(stamp, centro, radio, skyradio_int, skyradio_ext):
     return net_flux, net_error
 
 
-def estimate_background(image, box_size=(50, 50), filter_size=(3, 3), sigma=3.0):
-    sigma_clip = SigmaClip(sigma=sigma)
-    bkg_estimator = MedianBackground()
-    bkg = Background2D(
-        image,
-        box_size=box_size,
-        filter_size=filter_size,
-        sigma_clip=sigma_clip,
-        bkg_estimator=bkg_estimator
-    )
-    return bkg.background, bkg.background_rms
-
-
-def extract_sources(image, background, background_rms, threshold_sigma=5.0, npixels=10):
-    image_sub = image - background
-    threshold = threshold_sigma * background_rms
-    segm = detect_sources(
-        image_sub,
-        threshold=threshold,
-        npixels=npixels
-    )
-    
-    # Crear catálogo
-    cat = SourceCatalog(image_sub, segm)
-    #catalog = cat.to_table().to_pandas() 
-    return segm, cat
-
 # TODO
 def psf_phot():
     return
+
+
+def isophotal_phot(stamp):
+    box = max(stamp.shape[0] // 4, 5)
+    star = sources.extract_sources(stamp, box_size=(box, box), npixels=5, saturation_threshold=60000)
+    if star.empty:
+        return np.nan, np.nan, np.nan
+    return star['flux'][0], star['pixel_std'][0]
+
+
 
 def optimize_parameters(stamp, fwhm_min=1, fwhm_max=10, step=0.1, min_sky_width=1):
 
@@ -186,6 +169,7 @@ def optimize_parameters(stamp, fwhm_min=1, fwhm_max=10, step=0.1, min_sky_width=
     }
 
     return result   
+
 
 def plot_optimization(res, path):
     params = res["params"]

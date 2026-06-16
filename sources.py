@@ -61,15 +61,22 @@ def extract_sources(image, threshold_sigma=5.0, npixels=10, saturation_threshold
 
     cat = SourceCatalog(image_sub, segm)
 
+    pixel_std = [
+        float(np.std(image_sub[segm.data == lbl]))
+        for lbl in cat.label
+    ]
+
     df = pd.DataFrame({
         'id':          np.asarray(cat.label),
         'x':           np.asarray(cat.xcentroid, dtype=float),
         'y':           np.asarray(cat.ycentroid, dtype=float),
         'peak':        np.asarray(cat.max_value, dtype=float),
         'flux':        np.asarray(cat.segment_flux, dtype=float),
+        'flux_err':    np.asarray(cat.segment_flux_err, dtype=float),
         'area':        np.asarray(cat.area, dtype=int),
         'ellipticity': np.asarray(cat.ellipticity, dtype=float),
         'fwhm':        np.asarray(cat.fwhm, dtype=float),
+        'pixel_std':   pixel_std,
     })
 
     if saturation_threshold is not None:

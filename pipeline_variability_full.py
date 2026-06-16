@@ -30,7 +30,7 @@ dark120 = fits.open(dark120_path)[0].data
 flat = fits.open(flat_path)[0].data
 
 target_star = [2242, 1792]
-n_refs = 15
+n_refs = 1
 
 stamp_size = 15
 subframe_size = 400
