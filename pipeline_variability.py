@@ -1,15 +1,34 @@
+"""
+Differential-photometry pipeline: calibrate -> align -> plate solve -> photometry.
+
+Usage, from the folder with the science FITS:
+    python3 /path/to/star_pipeline/pipeline_variability.py pipeline_params.py
+
+photometry_mode (in the params file):
+    'aperture_common'    one aperture optimized on the target, applied to every star
+    'aperture_per_star'  aperture optimized independently for each star
+    'isophotal'          isophotal flux, no fixed aperture
+
+Relative paths in the params file are resolved from the params file's folder.
+Outputs go to <params folder>/<results_dir>/<photometry_mode>/.
+"""
 import os
+import sys
+import runpy
 import alignement
+import plate_solve
 import calibrations
 import photometry
 import sources
+import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from glob import glob
 from astropy.time import Time
 from astropy.io import fits
-import logging
+from astropy.visualization import ZScaleInterval
+from scipy.spatial import cKDTree
 import matplotlib.patches as patches
 from matplotlib.patches import Circle
 
@@ -17,184 +36,291 @@ from matplotlib.patches import Circle
 # INITIALIZATION
 ######################################################################################
 
-target_name = 'HATS-26'
-extension = '.fits'
-data_dir = '../HATS-26_transit'
-results_folder = data_dir + "/results/"
-os.makedirs(results_folder, exist_ok=True)
-dark100_path = '../RH200Calibs/master_dark_100s.fits'
-dark120_path = '../RH200Calibs/master_dark_120s.fits'
-flat_path = '../RH200Calibs/master_flat_L.fits'
-dark100 = fits.open(dark100_path)[0]
-dark120 = fits.open(dark120_path)[0]
-flat = fits.open(flat_path)[0]
-target_star = [2242, 1792]
-n_refs = 15
-stamp_size = 10
-subframe_size = 400
-saturation = 55000
+MODES = ('aperture_common', 'aperture_per_star', 'isophotal')
+DEFAULTS = {
+    'photometry_mode': 'aperture_common',
+    'extension': '.fits',
+    'results_dir': 'results',
+    'target_xy': None,
+    'search_radius': 2.0,
+    'solve_timeout': 120,
+    'n_refs': 25,
+    'stamp_size': 10,
+    'saturation': 60000,
+    'edge_margin': 80,
+    'fwhm_min': 0.5,
+    'fwhm_max': 7,
+    'fwhm_step': 0.5,
+    'show_plots': False,
+}
+
+if len(sys.argv) != 2:
+    sys.exit(__doc__)
+
+params_path = os.path.abspath(sys.argv[1])
+work_dir = os.path.dirname(params_path)
+p = {**DEFAULTS, **{k: v for k, v in runpy.run_path(params_path).items() if not k.startswith('__')}}
+
+mode = p['photometry_mode']
+if mode not in MODES:
+    sys.exit(f"photometry_mode must be one of {MODES}, got '{mode}'")
+
+
+def resolve(path):
+    return os.path.join(work_dir, os.path.expanduser(path))
+
+
+if not p['show_plots']:
+    matplotlib.use('Agg')
+
+stamp_size = p['stamp_size']
+results_folder = os.path.join(resolve(p['results_dir']), mode, '')
+os.makedirs(results_folder + 'stamps', exist_ok=True)
+
+if p.get('flat') is None:
+    print("no flat given: using flat = 1")
+    flat = 1.0
+else:
+    flat = fits.getdata(resolve(p['flat']))
+
+if p.get('darks') is None:
+    print("no darks given: using dark = 0")
+    darks = None
+else:
+    darks = {int(t): fits.getdata(resolve(path)) for t, path in p['darks'].items()}
+
+
+def finish_figure(path):
+    plt.savefig(path)
+    if p['show_plots']:
+        plt.show()
+    plt.close('all')
+
 
 ######################################################################################
 # CALIBRATION
 ######################################################################################
 
-# load science images
-data_files = glob(os.path.join(data_dir, '*'+extension))
+data_files = glob(os.path.join(work_dir, '*' + p['extension']))
+if not data_files:
+    sys.exit(f"no '*{p['extension']}' files in {work_dir}")
 data_files = calibrations.sort_by_date(data_files)
 sciences = []
 times = []
+exptimes = []
 for data_file in data_files:
     print(f"processing image: {data_file}")
     data_fits = fits.open(data_file)[0]
-    
-    # time indexation
-    ref_time = Time(data_fits.header['DATE-OBS'], format='isot').jd
-    times.append(ref_time)
+    sci = data_fits.data.astype(float)
+    if not sciences:
+        ref_header = data_fits.header
 
-    # calibration
-    if int(data_fits.header['exptime']) == 100:
-        sci = calibrations.calibrate(data_fits, flat, dark100)
-        
-    if int(data_fits.header['exptime']) == 120:
-        sci = calibrations.calibrate(data_fits, flat, dark120)
-    
-    sci = calibrations.extract_subframe(sci, target_star, subframe_size)
+    times.append(Time(data_fits.header['DATE-OBS'], format='isot').jd)
+    exptime = float(data_fits.header['EXPTIME'])
+    exptimes.append(exptime)
 
-    sciences.append(sci)
+    if darks is None:
+        dark = 0.0
+    else:
+        exptime = int(exptime)
+        if exptime not in darks:
+            sys.exit(f"no master dark for EXPTIME={exptime} s ({data_file})")
+        dark = darks[exptime]
+    sciences.append(calibrations.calibrate(sci, flat, dark, isfit=False))
 
 ######################################################################################
 # ALIGNMENT
 ######################################################################################
 
 print("start alignement")
-original_stack = np.array(sciences) # <- this works
-aligned_stack = np.array(alignement.phase_correlation_alignment(original_stack))
+aligned_stack = np.array(alignement.phase_correlation_alignment(np.array(sciences)))
+del sciences
 print("alignement done")
 
 ######################################################################################
-#  REFERENCE STARS
-######################################################################################
-print('searching referencer stars')
-
-# auto-detect reference stars from first aligned frame
-_catalog = sources.extract_sources(
-    aligned_stack[0],
-    saturation_threshold=saturation,
-    edge_margin=70,
-)
-ref_xys = sources.brightest_xy(_catalog, n=n_refs)
-target_xy = [float(subframe_size), float(subframe_size)]
-transformed_stars = [target_xy] + ref_xys
-print(f"target: {target_xy}  |  {len(ref_xys)} reference stars detected")
-transformed_stars = np.array(transformed_stars).astype(int)
-
-######################################################################################
-# PHOTOMETRY VISUALIZATION
+# ASTROMETRY — locate target on the reference frame
 ######################################################################################
 
-print("start photometry")
+# detect on the median stack: hot pixels and cosmics drift relative to the stars after
+# alignment and are rejected by the median. Saturation is checked on the max stack.
+median_stack = np.median(aligned_stack, axis=0)
+max_stack = aligned_stack.max(axis=0)
+catalog = sources.extract_sources(median_stack, saturation_threshold=None, edge_margin=p['edge_margin'])
+catalog['peak_raw'] = [max_stack[int(round(y)) - 2:int(round(y)) + 3, int(round(x)) - 2:int(round(x)) + 3].max()
+                       for x, y in catalog[['x', 'y']].values]
+
+
+def locate_target():
+    """Target pixel: manual override, else plate solve (target, then header pointing), else image center."""
+    if p['target_xy'] is not None:
+        print("using target_xy from params")
+        return list(map(float, p['target_xy'])), 'manual'
+
+    target = plate_solve.to_skycoord(p['target_name'])
+    scale = plate_solve.header_pixel_scale(ref_header)
+    centers = [('target coordinates', target),
+               ('header pointing', plate_solve.header_pointing(ref_header))]
+    for label, center in centers:
+        if center is None:
+            continue
+        print(f"plate solving around {label} ({center.to_string('hmsdms')})")
+        try:
+            wcs = plate_solve.solve_wcs(aligned_stack[0], center, radius=p['search_radius'],
+                                        scale=scale, timeout=p['solve_timeout'])
+        except RuntimeError as e:
+            print(f"  failed: {str(e).splitlines()[0]}")
+            continue
+        x, y = plate_solve.target_pixel(wcs, target)
+        ny, nx = max_stack.shape
+        if 0 <= x < nx and 0 <= y < ny:
+            return [x, y], f'plate solve ({label})'
+        print(f"  solved, but target falls outside the image ({x:.0f}, {y:.0f})")
+
+    print("WARNING: astrometry failed; assuming the target is the source closest to the image "
+          "center. Check finder.png, or set target_xy in the params file.")
+    ny, nx = max_stack.shape
+    i = np.argmin(np.hypot(catalog['x'] - nx / 2, catalog['y'] - ny / 2))
+    return [float(catalog['x'].iloc[i]), float(catalog['y'].iloc[i])], 'closest to image center'
+
+
+target_xy, target_method = locate_target()
+print(f"target at pixel ({target_xy[0]:.1f}, {target_xy[1]:.1f}) — {target_method}")
+
+######################################################################################
+# REFERENCE STARS AND STAMPS
+######################################################################################
+
+# references: unsaturated, isolated (no other detection inside the stamp), away from the target
+xy = catalog[['x', 'y']].values
+nn_dist = cKDTree(xy).query(xy, k=2)[0][:, 1]
+dist = np.hypot(catalog['x'] - target_xy[0], catalog['y'] - target_xy[1])
+usable = catalog[(catalog['peak_raw'] < p['saturation']) & (nn_dist > 1.5 * stamp_size) & (dist > 2 * stamp_size)]
+ref_xys = sources.brightest_xy(usable, n=p['n_refs'])
+stars = np.array([target_xy] + ref_xys).astype(int)
+print(f"{len(ref_xys)} reference stars")
+
+vmin, vmax = ZScaleInterval().get_limits(median_stack)
+fig, ax = plt.subplots(figsize=(8, 8))
+ax.imshow(median_stack, origin="lower", cmap="gray", vmin=vmin, vmax=vmax)
+for star_number, (x, y) in enumerate(stars):
+    color = "red" if star_number == 0 else "cyan"
+    ax.add_patch(Circle((x, y), 2 * stamp_size, edgecolor=color, facecolor="none", linewidth=1.2))
+    ax.annotate("T" if star_number == 0 else str(star_number), (x + 2 * stamp_size, y + 2 * stamp_size),
+                color=color, fontsize=10)
+ax.set_title(f"Finder — target (T): {target_method}")
+finish_figure(results_folder + 'finder.png')
+
 stamps = []
-# SHOW STAMPS
-for star in transformed_stars:
+for star_number, star in enumerate(stars):
     star_stamps = photometry.cut_stamp(aligned_stack, star, stamp_size)
     stamps.append(star_stamps)
+    fits.writeto(results_folder + f'stamps/star_{star_number}.fits', star_stamps, overwrite=True)
+
     img = np.max(star_stamps, axis=0)
-    mask = img > saturation
+    mask = img > p['saturation']
+    if mask.any():
+        print(f"WARNING: star {star_number} has {mask.sum()} saturated px in at least one frame")
     fig, ax = plt.subplots()
     ax.imshow(img, origin="lower", interpolation="nearest")
-    
-    # SHOW SATURATED PIXELS
     for y, x in np.argwhere(mask):
-        rect = patches.Rectangle(
-            (x - 0.5, y - 0.5),
-            1, 1,
-            linewidth=0,
-            facecolor="red",
-            alpha=0.5
-        )
-        ax.add_patch(rect)
-    n_sat = np.sum(img > saturation)
-    plt.title(f"Max stamp, star: {star}, number of saturated pix: {n_sat}")
-    plt.show()
+        ax.add_patch(patches.Rectangle((x - 0.5, y - 0.5), 1, 1,
+                                       linewidth=0, facecolor="red", alpha=0.5))
+    ax.set_title(f"Max stamp, star {star_number} {star}, saturated px: {mask.sum()}")
+    finish_figure(results_folder + f'{star_number}_max_stamp.png')
 
 stamps = np.array(stamps)
-fluxes = np.zeros((len(transformed_stars), len(aligned_stack)))
-fluxes_err = np.zeros((len(transformed_stars), len(aligned_stack)))
+n_stars, n_frames = len(stars), len(aligned_stack)
+fluxes = np.zeros((n_stars, n_frames))
+errors = np.zeros((n_stars, n_frames))
 
 ######################################################################################
-# OPTIMIZE APERTURE AND SKIES
+# PHOTOMETRY
 ######################################################################################
 
-params = photometry.optimize_parameters(np.median(stamps[0], axis=0), step=0.5, fwhm_min=0.5, fwhm_max=5)
-photometry.plot_optimization(params, results_folder)
-radio_apertura = params['best_params']['aperture']
-radiosky_in = params['best_params']['sky_in']
-radiosky_out = params['best_params']['sky_out']
 
-# photometry for every star and stamp
-for star in enumerate(transformed_stars):
-    star_number = star[0]
-    for stamp in enumerate(stamps[star_number]):
-        stamp_number = stamp[0]
-        print(f"processing star : {star_number}, stamp: {stamp_number}")
-
-        centroide = photometry.centroid(stamp[1])
-        flux, flux_err = photometry.aperture_phot(stamp[1], centroide, radio_apertura, radiosky_in, radiosky_out)
-        fluxes[star_number, stamp_number] = flux
-        fluxes_err[star_number, stamp_number] = flux_err
-        
-        if star_number==1:
-            hdu = fits.PrimaryHDU(stamp[1])
-            os.makedirs(results_folder + "/stamps/", exist_ok=True)
-            hdu.writeto(results_folder + "/stamps/stamp"+str(stamp_number)+".fits", overwrite=True)
-        
-    # --- PLOT DE CONTROL: stamp mediana + aperturas ---
+def optimize(star_number):
     median_stamp = np.median(stamps[star_number], axis=0)
-    centroide_med = photometry.centroid(median_stamp)
+    res = photometry.optimize_parameters(median_stamp, step=p['fwhm_step'],
+                                         fwhm_min=p['fwhm_min'], fwhm_max=p['fwhm_max'])
+    photometry.plot_optimization(res, results_folder + f'star_{star_number}_')
+    plt.close('all')
+    best = res['best_params']
+    print(f"  star {star_number}: aperture={best['aperture']:.2f}  sky_in={best['sky_in']:.2f}  "
+          f"sky_out={best['sky_out']:.2f}  SNR={res['best_snr']:.1f}")
+    return best
 
-    fig, ax = plt.subplots()
-    ax.imshow(median_stamp, origin="lower", interpolation="nearest")
-    ax.set_title(f"Star {star_number} – Aperture check")
-    plt.colorbar(ax.images[0], ax=ax, label="Flux")
 
-    # Centroide
-    ax.plot(
-        centroide_med[0], centroide_med[1],
-        marker="+", color="cyan", markersize=10, label="Centroid"
-    )
-    # Apertura
-    ap = Circle(
-        centroide_med, radio_apertura,
-        edgecolor="lime", facecolor="none", linewidth=1.5, label="Aperture"
-    )
-    ax.add_patch(ap)
-    # Sky inner
-    sky_in = Circle(
-        centroide_med, radiosky_in,
-        edgecolor="orange", facecolor="none", linestyle="--", label="Sky in"
-    )
-    ax.add_patch(sky_in)
-    # Sky outer
-    sky_out = Circle(
-        centroide_med, radiosky_out,
-        edgecolor="red", facecolor="none", linestyle="--", label="Sky out"
-    )
-    ax.add_patch(sky_out)
-    ax.legend(loc="upper right")
-    plt.savefig(results_folder + f'{star_number}_aperture_check.png')
-    plt.show()
-            
+if mode == 'isophotal':
+    print("start isophotal photometry")
+    for star_number in range(n_stars):
+        for frame, stamp in enumerate(stamps[star_number]):
+            fluxes[star_number, frame], errors[star_number, frame] = photometry.isophotal_phot(stamp)
+    err_label = 'pixel_std_star_'
+
+else:
+    print(f"start aperture photometry ({mode})")
+    if mode == 'aperture_common':
+        apertures = [optimize(0)] * n_stars
+    else:
+        apertures = [optimize(i) for i in range(n_stars)]
+
+    for star_number in range(n_stars):
+        ap = apertures[star_number]
+        median_stamp = np.median(stamps[star_number], axis=0)
+        median_centre = photometry.centroid(median_stamp)
+        n_fallback = 0
+        for frame, stamp in enumerate(stamps[star_number]):
+            try:
+                centre = photometry.centroid(stamp)
+            except Exception:
+                centre = (np.nan, np.nan)
+            # a non-converged fit can land far away; frames are aligned, so the median centroid is valid
+            if np.hypot(centre[0] - median_centre[0], centre[1] - median_centre[1]) > ap['aperture'] \
+                    or not np.isfinite(centre).all():
+                centre = median_centre
+                n_fallback += 1
+            fluxes[star_number, frame], errors[star_number, frame] = photometry.aperture_phot(
+                stamp, centre, ap['aperture'], ap['sky_in'], ap['sky_out'])
+        if n_fallback:
+            print(f"  star {star_number}: median centroid used in {n_fallback}/{n_frames} frames")
+
+        centre = median_centre
+        fig, ax = plt.subplots()
+        im = ax.imshow(median_stamp, origin="lower", interpolation="nearest")
+        plt.colorbar(im, ax=ax, label="Flux")
+        ax.plot(*centre, marker="+", color="cyan", markersize=10, label="Centroid")
+        ax.add_patch(Circle(centre, ap['aperture'], edgecolor="lime", facecolor="none",
+                            linewidth=1.5, label="Aperture"))
+        ax.add_patch(Circle(centre, ap['sky_in'], edgecolor="orange", facecolor="none",
+                            linestyle="--", label="Sky in"))
+        ax.add_patch(Circle(centre, ap['sky_out'], edgecolor="red", facecolor="none",
+                            linestyle="--", label="Sky out"))
+        ax.set_title(f"Star {star_number} – Aperture check")
+        ax.legend(loc="upper right")
+        finish_figure(results_folder + f'{star_number}_aperture_check.png')
+    err_label = 'err_flux_star_'
+
 print("photometry done.")
 
 ######################################################################################
 # SAVING
 ######################################################################################
 
-fluxes = fluxes.transpose()   
-fluxes_err = fluxes_err.transpose()
-fluxes_df = pd.DataFrame()
-fluxes_df['time'] = np.array(times)
-for i in range(len(transformed_stars)):
-    fluxes_df['flux_star_'+str(i)] = fluxes[:,i]
-    fluxes_df['err_flux_star_'+str(i)] = fluxes_err[:,i]
-fluxes_df.to_csv(results_folder + '/fluxes.csv', index=False)
+df = pd.DataFrame({'time': np.array(times), 'exptime': np.array(exptimes),
+                   'n_sat_target': (stamps[0] > p['saturation']).sum(axis=(1, 2))})
+for i in range(n_stars):
+    df[f'flux_star_{i}'] = fluxes[i]
+    df[f'{err_label}{i}'] = errors[i]
+df.to_csv(results_folder + 'fluxes.csv', index=False)
+
+plt.figure(figsize=(10, 4))
+plt.plot(times, exptimes, 'o-', drawstyle='steps-post')
+plt.xlabel('Time (JD)')
+plt.ylabel('EXPTIME (s)')
+plt.title(f'Exposure time ({n_frames} frames)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+finish_figure(results_folder + 'exptime_vs_jd.png')
+
+pd.DataFrame(stars, columns=['x', 'y']).rename_axis('star').to_csv(results_folder + 'stars.csv')
+print(f"results saved in {results_folder}")

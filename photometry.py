@@ -10,7 +10,7 @@ from photutils.segmentation import SourceCatalog
 import pandas as pd
 import matplotlib.pyplot as plt
 from photutils.psf import fit_fwhm
-from photutils.centroids import centroid_2dg
+from photutils.centroids import centroid_2dg, centroid_com
 import numpy as np
 import sources
 
@@ -36,11 +36,7 @@ def cut_stamp(frames, center, radius, recenter=True):
     # Usar la mediana para encontrar mejor centroide
     median_stamp = np.median(stamps, axis=0)
 
-    try:
-        cx, cy = centroid_2dg(median_stamp)
-    except Exception:
-        # fallback si falla el ajuste
-        cx, cy = np.array(median_stamp.shape[::-1]) / 2
+    cx, cy = centroid(median_stamp)
 
     # Centro refinado en coordenadas del frame
     x_ref = int(x0 - radius + cx)
@@ -57,8 +53,16 @@ def cut_stamp(frames, center, radius, recenter=True):
 
 
 def centroid(stamp):
-    cx, cy = centroid_2dg(stamp)
-    return cx, cy
+    # centroid_2dg (photutils >= 1.x) no ajusta fondo: restar el cielo o el ajuste diverge en estrellas débiles
+    data = stamp - sigma_clipped_stats(stamp, sigma=3.0)[1]
+    ny, nx = data.shape
+    try:
+        cx, cy = centroid_2dg(data)
+    except Exception:
+        cx, cy = np.nan, np.nan
+    if not (0 <= cx < nx and 0 <= cy < ny):
+        cx, cy = centroid_com(np.clip(data, 0, None))
+    return float(cx), float(cy)
 
 
 def aperture_phot(stamp, centro, radio, skyradio_int, skyradio_ext):
@@ -71,7 +75,11 @@ def aperture_phot(stamp, centro, radio, skyradio_int, skyradio_ext):
     # SKY FLUX EXTIMATION
     annulus_mask = annulus.to_mask(method='center')
     annulus_data = annulus_mask.multiply(stamp)
+    if annulus_data is None:   # annulus entirely outside the stamp
+        return np.nan, np.nan
     sky_pixels = annulus_data[annulus_data != 0]
+    if sky_pixels.size == 0:
+        return np.nan, np.nan
     sky_mean, sky_median, sky_std = sigma_clipped_stats(sky_pixels, sigma=3.0)
     sky_sum = sky_median * aperture.area
     
@@ -101,7 +109,7 @@ def isophotal_phot(stamp):
     box = max(stamp.shape[0] // 4, 5)
     star = sources.extract_sources(stamp, box_size=(box, box), npixels=5, saturation_threshold=60000)
     if star.empty:
-        return np.nan, np.nan, np.nan
+        return np.nan, np.nan
     return star['flux'][0], star['pixel_std'][0]
 
 
@@ -117,12 +125,19 @@ def optimize_parameters(stamp, fwhm_min=1, fwhm_max=10, step=0.1, min_sky_width=
 
     # --- centro y FWHM ---
     centro = centroid(stamp)
-    fwhm = fit_fwhm(stamp)[0]
+    # fit_fwhm ajusta una gaussiana sin fondo: restar el cielo o el pedestal infla el FWHM
+    fwhm = fit_fwhm(stamp - sigma_clipped_stats(stamp, sigma=3.0)[1], xypos=centro)[0]
 
     # --- grilla de búsqueda (escalada con FWHM) ---
-    ap = np.arange(fwhm_min*fwhm, fwhm_max*fwhm, step)
-    sky_in = np.arange(fwhm_min*fwhm + step, fwhm_max*fwhm, step)
-    sky_out = np.arange(fwhm_min*fwhm + 2*step, fwhm_max*fwhm, step)
+    # el anillo de cielo debe caber en el stamp; si no, el cielo sale de las esquinas
+    r_edge = min(centro[0], centro[1], stamp.shape[1] - 1 - centro[0], stamp.shape[0] - 1 - centro[1])
+    r_max = min(fwhm_max * fwhm, r_edge)
+    if fwhm_max * fwhm > r_edge:
+        print(f"WARNING: radii clipped to {r_edge:.1f} px (stamp too small for "
+              f"fwhm_max*FWHM = {fwhm_max * fwhm:.1f} px); consider a larger stamp_size")
+    ap = np.arange(fwhm_min*fwhm, r_max, step)
+    sky_in = np.arange(fwhm_min*fwhm + step, r_max, step)
+    sky_out = np.arange(fwhm_min*fwhm + 2*step, r_max, step)
 
     AP, IN, OUT = np.meshgrid(ap, sky_in, sky_out, indexing="ij")
     params = np.column_stack([AP.ravel(), IN.ravel(), OUT.ravel()])

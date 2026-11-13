@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from scipy import ndimage
 from astropy.io import fits
 from astropy.stats import SigmaClip
 from photutils.background import Background2D, MedianBackground
@@ -21,7 +22,7 @@ def extract_sources(image, threshold_sigma=5.0, npixels=10, saturation_threshold
     npixels : int
         Minimum connected pixels to count as a source.
     saturation_threshold : float or None
-        Discard sources whose peak pixel >= this value. None keeps all.
+        Discard sources whose raw (not background-subtracted) peak >= this value. None keeps all.
     box_size : tuple
         Box size for 2D background estimation.
     filter_size : tuple
@@ -61,18 +62,15 @@ def extract_sources(image, threshold_sigma=5.0, npixels=10, saturation_threshold
 
     cat = SourceCatalog(image_sub, segm)
 
-    pixel_std = [
-        float(np.std(image_sub[segm.data == lbl]))
-        for lbl in cat.label
-    ]
+    pixel_std = ndimage.standard_deviation(image_sub, segm.data, cat.label)
 
     df = pd.DataFrame({
         'id':          np.asarray(cat.label),
         'x':           np.asarray(cat.xcentroid, dtype=float),
         'y':           np.asarray(cat.ycentroid, dtype=float),
         'peak':        np.asarray(cat.max_value, dtype=float),
+        'peak_raw':    ndimage.maximum(image, segm.data, cat.label),  # before background subtraction
         'flux':        np.asarray(cat.segment_flux, dtype=float),
-        'flux_err':    np.asarray(cat.segment_flux_err, dtype=float),
         'area':        np.asarray(cat.area, dtype=int),
         'ellipticity': np.asarray(cat.ellipticity, dtype=float),
         'fwhm':        np.asarray(cat.fwhm, dtype=float),
@@ -81,7 +79,7 @@ def extract_sources(image, threshold_sigma=5.0, npixels=10, saturation_threshold
 
     if saturation_threshold is not None:
         n_before = len(df)
-        df = df[df['peak'] < saturation_threshold].reset_index(drop=True)
+        df = df[df['peak_raw'] < saturation_threshold].reset_index(drop=True)
         removed = n_before - len(df)
         if removed:
             print(f"{removed} saturated sources removed (peak >= {saturation_threshold})")
