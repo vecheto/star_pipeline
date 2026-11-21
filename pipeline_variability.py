@@ -44,6 +44,8 @@ DEFAULTS = {
     'target_xy': None,
     'search_radius': 2.0,
     'solve_timeout': 120,
+    'plate_solver': 'auto',
+    'solve_downsample': None,
     'n_refs': 25,
     'stamp_size': 10,
     'saturation': 60000,
@@ -51,7 +53,9 @@ DEFAULTS = {
     'fwhm_min': 0.5,
     'fwhm_max': 7,
     'fwhm_step': 0.5,
+    'align_rotation': False,
     'show_plots': False,
+    'exofop': False,
 }
 
 if len(sys.argv) != 2:
@@ -133,7 +137,25 @@ for data_file in data_files:
 ######################################################################################
 
 print("start alignement")
-aligned_stack = np.array(alignement.phase_correlation_alignment(np.array(sciences)))
+if p['align_rotation']:
+    aligned, angles, shifts, corrs = alignement.rotation_alignment(sciences)
+    aligned_stack = np.array(aligned)
+    # pixels not covered by every frame (rotated-out corners): fill so downstream code works,
+    # and reject sources there (below)
+    covered = np.isfinite(aligned_stack).all(axis=0)
+    for frame in aligned_stack:
+        frame[~np.isfinite(frame)] = np.nanmedian(frame)
+    fig, ax = plt.subplots(2, 1, sharex=True)
+    ax[0].plot(times, angles, '.')
+    ax[0].set_ylabel('rotation [deg]')
+    ax[1].plot(times, corrs, '.')
+    ax[1].set_ylabel('correlation')
+    ax[1].set_xlabel('JD')
+    plt.savefig(results_folder + 'alignment.png')
+    plt.close(fig)
+else:
+    aligned_stack = np.array(alignement.phase_correlation_alignment(np.array(sciences)))
+    covered = np.ones(aligned_stack.shape[1:], dtype=bool)
 del sciences
 print("alignement done")
 
@@ -148,42 +170,18 @@ max_stack = aligned_stack.max(axis=0)
 catalog = sources.extract_sources(median_stack, saturation_threshold=None, edge_margin=p['edge_margin'])
 catalog['peak_raw'] = [max_stack[int(round(y)) - 2:int(round(y)) + 3, int(round(x)) - 2:int(round(x)) + 3].max()
                        for x, y in catalog[['x', 'y']].values]
+if not covered.all():
+    from scipy.ndimage import binary_erosion
+    inner = binary_erosion(covered, iterations=2 * stamp_size)
+    keep = inner[catalog['y'].round().astype(int), catalog['x'].round().astype(int)]
+    print(f"{(~keep).sum()} sources dropped: not covered by every frame after rotation")
+    catalog = catalog[keep].reset_index(drop=True)
 
 
-def locate_target():
-    """Target pixel: manual override, else plate solve (target, then header pointing), else image center."""
-    if p['target_xy'] is not None:
-        print("using target_xy from params")
-        return list(map(float, p['target_xy'])), 'manual'
-
-    target = plate_solve.to_skycoord(p['target_name'])
-    scale = plate_solve.header_pixel_scale(ref_header)
-    centers = [('target coordinates', target),
-               ('header pointing', plate_solve.header_pointing(ref_header))]
-    for label, center in centers:
-        if center is None:
-            continue
-        print(f"plate solving around {label} ({center.to_string('hmsdms')})")
-        try:
-            wcs = plate_solve.solve_wcs(aligned_stack[0], center, radius=p['search_radius'],
-                                        scale=scale, timeout=p['solve_timeout'])
-        except RuntimeError as e:
-            print(f"  failed: {str(e).splitlines()[0]}")
-            continue
-        x, y = plate_solve.target_pixel(wcs, target)
-        ny, nx = max_stack.shape
-        if 0 <= x < nx and 0 <= y < ny:
-            return [x, y], f'plate solve ({label})'
-        print(f"  solved, but target falls outside the image ({x:.0f}, {y:.0f})")
-
-    print("WARNING: astrometry failed; assuming the target is the source closest to the image "
-          "center. Check finder.png, or set target_xy in the params file.")
-    ny, nx = max_stack.shape
-    i = np.argmin(np.hypot(catalog['x'] - nx / 2, catalog['y'] - ny / 2))
-    return [float(catalog['x'].iloc[i]), float(catalog['y'].iloc[i])], 'closest to image center'
-
-
-target_xy, target_method = locate_target()
+target_xy, target_method = plate_solve.locate_target(
+    aligned_stack[0], ref_header, catalog, p['target_name'], target_xy=p['target_xy'],
+    search_radius=p['search_radius'], timeout=p['solve_timeout'], solver=p['plate_solver'],
+    cache_dir=work_dir, use_exofop=p['exofop'], downsample=p['solve_downsample'])
 print(f"target at pixel ({target_xy[0]:.1f}, {target_xy[1]:.1f}) — {target_method}")
 
 ######################################################################################

@@ -89,13 +89,26 @@ sources.py      ─┘
 
 ### `alignement.py` *(el typo del nombre es heredado — no renombrar sin actualizar los imports)*
 - `phase_correlation_alignment(images, upsamplefactor=10)` — correlación cruzada en Fourier; la primera imagen es la referencia
+- `rotation_alignment(images, ...)` — rotación + traslación (meridian flip, rotación de campo cerca del polo, p. ej. TOI-3268 a Dec −88°: 165°). Busca el ángulo que maximiza la correlación sobre imágenes limpias (mediana 3×3, fondo restado) cerca del ángulo del frame anterior; si corr < 0.5, búsqueda global 0–360°. Píxeles sin cobertura → NaN. Se activa con `align_rotation = True`; el pipeline descarta fuentes fuera de la zona cubierta y guarda `alignment.png`
 - `stack(images, method)` — `'mean'`, `'median'`, `'max'` o `'sum'`
 
 ### `plate_solve.py` *(no llamarlo `astrometry.py`: tapa el paquete Python de astrometry.net y `solve-field` falla)*
 - `header_pointing(header)` — RA/Dec del header (`RAJ2000`/`DECJ2000`, `RA`/`DEC`, `OBJCTRA`/`OBJCTDEC`); `None` si no hay
 - `header_pixel_scale(header)` — ″/px desde `FOCALLEN`, `XPIXSZ`, `XBINNING`
-- `solve_wcs(image, center, radius, scale, timeout)` — `solve-field` local (índices Tycho-2 07–19 en `/usr/share/astrometry`); timeout por reloj matando el grupo de procesos (`--cpulimit` no se respeta)
+- `solve_wcs(image, center, radius, scale, timeout, solver='auto')` — `'auto'`: **ASTAP** (`astap_cli`, base D50; en Windows en `C:\Program Files\astap`, ver `find_astap`) si está instalado, si no `solve-field` local (índices Tycho-2 07–19 en `/usr/share/astrometry`). Parámetros `plate_solver` y `solve_downsample` en `pipeline_params.py` (`downsample`: binning del solver antes de detectar estrellas, `-z` en ASTAP / `--downsample` en solve-field; `None` = default del solver; 2–4 ayuda con estrellas desenfocadas; el WCS sale en píxeles originales). Timeout por reloj matando el grupo de procesos (`--cpulimit` no se respeta). ASTAP copia el `RADESYS` de entrada (p. ej. `GAPPT`); `_read_wcs` lo fuerza a `ICRS`
 - `target_pixel(wcs, target)` — (x, y) 0-based de un nombre resoluble por Sesame o un `SkyCoord`
+- `locate_target(image, header, catalog, target_name, target_xy=None, ...)` — implementa el orden de abajo; devuelve `([x, y], método)`
+
+- `to_skycoord(target, cache_dir, use_exofop)` — nombre → Sesame; con `use_exofop` y nombre `TOI-…` → ExoFOP
+
+### `exofop.py` *(solo con `exofop = True` en `pipeline_params.py`)*
+- `toi_info(name, cache_dir)` — `TOI-7886` / `TOI-7886.01` → TIC, RA/Dec, época (BJD_TDB), período, duración, profundidad. Sin sufijo usa el `.01` y avisa si hay más candidatos. Caché en `<carpeta>/exofop_TOI-<n>.json` (reprocesar offline; borrarlo para refrescar)
+- `jd_utc_to_bjd_tdb(jd, coord)` — corrección baricéntrica (observador geocéntrico)
+- `transits_in(info, t0, t1)` — tránsitos predichos en la ventana (Tc, ingreso, egreso, σ_Tc propagado)
+
+Con `exofop = True`, `plot_results.py` usa eje BJD_TDB a mitad de exposición (columna `bjd_tdb` en
+`relative_phot.csv`) y marca ingreso/egreso (líneas a trazos) y Tc ± σ. `ephemeris = (T0, P, dur_h)`
+en los parámetros marca un tránsito manual sin ExoFOP. Con `exofop = False` no hay ninguna consulta a ExoFOP.
 
 Orden en el pipeline: `target_xy` manual → plate solve centrado en el **objetivo** → centrado
 en el apuntado del header → fuente más cercana al centro. El objetivo va primero porque el
